@@ -3,8 +3,7 @@
 
 from pyspark.sql import SparkSession
 
-username = "holuser01"
-db_name = "holuser01_insurance_analytics"
+from workshop_config import insurance_db, log_identity, resolve_username
 
 
 def build_spark(app_name):
@@ -19,7 +18,10 @@ def build_spark(app_name):
     )
 
 
-spark = build_spark(f"{username}-CDE-silver-claims-enriched")
+spark = build_spark("CDE-silver-claims-enriched")
+log_identity(spark)
+username = resolve_username(spark)
+db_name = insurance_db(spark)
 
 print("Silver: enriched claims (join silver_claims + silver_customers)")
 spark.sql(

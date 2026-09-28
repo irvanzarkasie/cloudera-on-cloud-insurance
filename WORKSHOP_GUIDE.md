@@ -2,7 +2,7 @@
 
 **Scenario:** Insurance claims fraud and exposure analytics across **CDE**, **Iceberg**, **CDW**, **CAI Workbench**, and **Agent Studio**.
 
-**Environment defaults:** user `holuser01`, database `holuser01_insurance_analytics`, raw data at `s3a://cloudera-hol-buk-99feb843/data/user/holuser01/`.
+**Environment:** Jobs **01–11** resolve the CDP user automatically via `workshop_config.py` (`spark.sparkContext.sparkUser()` or env vars). Database `{username}_insurance_analytics`, S3 prefix `s3a://cloudera-hol-buk-99feb843/data/user/{runtime_user}/`. Example login: `holuser01`.
 
 ---
 
@@ -46,7 +46,7 @@ flowchart TB
 **Script:** `cde/01_load_customers_iceberg.py`  
 **CDE job name:** `holuser01_01_load_customers_iceberg`
 
-1. Upload scripts to a CDE **Resource**.
+1. Upload all files from **`cde/`** to a CDE **Resource**.
 2. Create a **Spark** job; select `01_load_customers_iceberg.py`.
 3. **Run** the job.
 
@@ -73,7 +73,15 @@ Summary:
 3. Edit job **09** → **Configurations** → **Python Environment** → select `holuser01-python-gx`.
 4. **Application file** stays in your **Files** resource (`holuser01-insurance`); libraries live in the Python Environment.
 
-Flow: Spark session → `spark.table("…customers")` → Great Expectations (null/unique `customer_id`, age/state/score ranges, ~100k row count).
+Flow: Spark session → `spark.table("…customers")` → Great Expectations (6 checks) → append **6 rows** to Iceberg `data_quality_check` (one row per check, keyed by `execution_id` + `execution_time`).
+
+```sql
+SELECT execution_id, execution_time, check_name, dq_score, success
+FROM holuser01_insurance_analytics.data_quality_check
+WHERE target_table = 'holuser01_insurance_analytics.customers'
+ORDER BY execution_time DESC, check_name
+LIMIT 12;
+```
 
 ---
 
@@ -101,7 +109,7 @@ Bronze tables from Steps 1–2 feed **silver/gold** PySpark jobs plus a **Great 
 
 | Order | Job name | Script | Layer | Output / purpose |
 |-------|----------|--------|-------|------------------|
-| 3a | `holuser01_03_silver_customers` | `03_silver_customers.py` | Silver | `silver_customers` |
+| 3a | `holuser01_03_silver_customers` | `03_silver_customers.py` | Silver | `silver_customers` (+ UDF demo — see below) |
 | 3b | `holuser01_04_silver_claims` | `04_silver_claims.py` | Silver | `silver_claims` |
 | 3c | `holuser01_05_silver_claims_enriched` | `05_silver_claims_enriched.py` | Silver | `silver_claims_enriched` |
 | 3d | `holuser01_08_data_quality_great_expectations` | `08_data_quality_great_expectations.py` | Quality | Validates `silver_claims_enriched` (fails job if checks fail) |
@@ -112,16 +120,51 @@ Bronze tables from Steps 1–2 feed **silver/gold** PySpark jobs plus a **Great 
 
 1. Create Spark session  
 2. `spark.table("holuser01_insurance_analytics.silver_claims_enriched")`  
-3. Run expectation suite on the DataFrame (null checks, amount ranges, state/band domains, claim_id uniqueness proportion)
+3. Run expectation suite (7 checks) on the DataFrame  
+4. Append **7 rows** to the same Iceberg table **`data_quality_check`** as job 09, with a new **`execution_id`** and **`target_table`** = `…silver_claims_enriched` (job 09 uses `…customers`).
+
+Query both DQ runs:
+
+```sql
+SELECT target_table, execution_id, COUNT(*) AS checks, MIN(execution_time) AS ran_at
+FROM holuser01_insurance_analytics.data_quality_check
+GROUP BY target_table, execution_id
+ORDER BY ran_at DESC;
+```
 
 Attach the **Python Environment** resource (see [CDE_PYTHON_ENVIRONMENT.md](./docs/CDE_PYTHON_ENVIRONMENT.md)).
 
 **Run gold jobs (3e–3f) only after job 08 passes.**
 
+**Job 03 — PySpark UDF (DataFrame API) + `scipy`:**
+
+Attach the **Python Environment** with `scipy`, **`pyarrow`**, and **`pandas`** (required for **`pandas_udf`** — see `requirements.txt`). Uses **`pandas_udf`** so each batch is scored with SciPy vector stats (hard to replicate correctly in SQL alone):
+
+| Library | Column | Calculation |
+|---------|--------|-------------|
+| **`scipy.stats.zscore`** | `fraud_risk_zscore` | Standardised fraud score within batch |
+| **`scipy.stats.rankdata`** | `fraud_risk_percentile` | Tie-aware percentile rank 0–100 |
+
+**Job 04 — Spark SQL UDF + `holidays` / `dateutil`:**
+
+Register UDFs, then call in `CREATE TABLE … AS SELECT`:
+
+| Library | SQL function | Column | Calculation |
+|---------|--------------|--------|-------------|
+| **`holidays`** | `is_us_federal_holiday(claim_date)` | `is_us_federal_holiday` | US federal holiday calendar |
+| **`python-dateutil`** | `months_to_book_end(claim_date)` | `months_to_book_end` | Whole months to 2024-12-31 via `relativedelta` |
+
+| Job | UDF style | Third-party stack |
+|-----|-----------|-------------------|
+| 03 | DataFrame `pandas_udf` | **scipy** |
+| 04 | `spark.udf.register` + SQL | **holidays**, **python-dateutil** |
+
+Rebuild the Python Environment after updating `requirements.txt`, then attach it to jobs **03**, **04**, **08**, and **09**.
+
 **Silver logic (summary):**
 
-- Valid ages, states, fraud bands on customers.
-- Valid amounts, statuses, `claim_month` on claims.
+- Valid ages, states, fraud bands on customers (+ scipy risk scores).
+- Valid amounts, statuses, `claim_month` on claims (+ holiday / tenure UDF columns).
 - Inner join → enriched fact.
 
 **Gold logic (summary):**
@@ -130,6 +173,44 @@ Attach the **Python Environment** resource (see [CDE_PYTHON_ENVIRONMENT.md](./do
 - Monthly trends for forecasting.
 - Watchlist for fraud ops (HIGH band, large claims).
 
+### Optional — Spark ML jobs (10 & 11)
+
+No custom Python Environment required (`pyspark.ml` on the cluster).
+
+**Which ML fits this dataset?**
+
+| Job | Question | Makes sense? |
+|-----|----------|--------------|
+| **11** | Next months’ **volume & dollars** by product line | **Yes** — uses `gold_monthly_claim_trends`; aligns with planning/forecasting |
+| **10** | **Policy type** from claim features | **Yes** (demo) — synthetic amounts vary by product |
+| **10** | **Denied vs not** | **Weak** — `claim_status` is random in the generator |
+| CAI notebook | Rolling / linear trend on same gold table | **Yes** — lighter-weight than Spark ML for small series |
+
+#### Job 10 — row-level (`10_spark_ml_policy_classifier.py`)
+
+**When:** After job **05**. RandomForest on a **sample** of `silver_claims_enriched`: `policy_type` + binary **denied**. Output: **`gold_ml_claim_predictions`**.
+
+**CDE job name:** `holuser01_10_spark_ml_policy_classifier`
+
+#### Job 11 — monthly forecast (`11_spark_ml_monthly_forecast.py`) *(recommended ML narrative)*
+
+**When:** After job **07** (`gold_monthly_claim_trends`).
+
+- **Input:** one row per `(claim_month, policy_type)` with `claim_count`, `total_claim_amount`
+- **Features:** time index (`month_ordinal`) + `policy_type`
+- **Models:** two **GBTRegressor** pipelines — predict **claim_count** and **total_claim_amount**
+- **Validation:** last **3** calendar months = holdout (time split, not random)
+- **Forward:** one-step forecast for each policy type after the latest month in gold
+- **Output:** **`gold_ml_monthly_forecast`** (`metric`, `actual_value`, `predicted_value`, `forecast_type` = `holdout` \| `forward`)
+
+```sql
+SELECT * FROM holuser01_insurance_analytics.gold_ml_monthly_forecast
+WHERE forecast_type = 'holdout'
+ORDER BY claim_month, policy_type, metric;
+```
+
+**CDE job name:** `holuser01_11_spark_ml_monthly_forecast`
+
 **Validate after 3f:**
 
 ```sql
@@ -137,7 +218,7 @@ SELECT COUNT(*) FROM holuser01_insurance_analytics.silver_claims_enriched;
 SELECT * FROM holuser01_insurance_analytics.gold_claims_kpi_by_state LIMIT 5;
 ```
 
-**Optional orchestration:** Deploy `medallion_airflow_dag.py` to CDE Airflow to chain Steps 1–3f (DQ job 08 runs before gold).
+**Optional orchestration:** Deploy `medallion_airflow_dag.py` to CDE Airflow. The DAG runs jobs **01–07** only (DQ jobs **08** / **09** are ad hoc, not in the DAG): **01 ∥ 02**, **03 ∥ 04**, **05 → (06 ∥ 07)**.
 
 ---
 

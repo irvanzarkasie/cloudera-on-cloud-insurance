@@ -5,6 +5,8 @@
 
 from pyspark.sql import SparkSession
 
+from workshop_config import insurance_db, log_identity, resolve_username, workshop_data_base
+
 
 def build_spark(app_name):
     return (
@@ -17,16 +19,11 @@ def build_spark(app_name):
         .getOrCreate()
     )
 
-# --- Workshop settings ---
-username = "holuser01".replace("-", "_")
-data_base = "s3a://cloudera-hol-buk-99feb843/data/user/holuser01"
-
-db_name = username.replace("-", "_") + "_insurance_analytics"
-app_name = f"{username}-CDE-insurance-load-customers"
-
-customers_path = f"{data_base}/customers.csv"
-
-spark = build_spark(app_name)
+spark = build_spark("CDE-insurance-load-customers")
+log_identity(spark)
+username = resolve_username(spark)
+db_name = insurance_db(spark)
+customers_path = f"{workshop_data_base(spark)}/customers.csv"
 
 print("...............................")
 print(f"Reading customers from {customers_path}")

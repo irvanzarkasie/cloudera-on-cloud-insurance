@@ -36,12 +36,14 @@
 | `holuser01_08_data_quality_great_expectations` | `08_data_quality_great_expectations.py` + same Python Environment |
 | `holuser01_06_gold_kpi_by_state` | `06_gold_kpi_by_state.py` |
 | `holuser01_07_gold_trends_and_watchlist` | `07_gold_trends_and_watchlist.py` |
+| `holuser01_10_spark_ml_policy_classifier` (optional) | `10_spark_ml_policy_classifier.py` — after 05 |
+| `holuser01_11_spark_ml_monthly_forecast` (optional) | `11_spark_ml_monthly_forecast.py` — after 07; **preferred ML story** |
 
-Upload **all** `.py` files from `scripts/` to a **Files** resource per participant (e.g. `holuser01-insurance`).
+Upload **all** `.py` files from `cde/` to a **Files** resource per participant — **include `workshop_config.py`**. CDE job names stay `{username}_01_...` (create jobs with each participant’s prefix; scripts pick up the runtime user automatically).
 
-**Before DQ labs:** one **Python Environment** resource per participant (or shared) built from `scripts/requirements.txt` — see `docs/CDE_PYTHON_ENVIRONMENT.md`.
+**Before DQ labs:** one **Python Environment** resource per participant (or shared) built from `cde/requirements.txt` — see `docs/CDE_PYTHON_ENVIRONMENT.md`.
 
-Airflow: `medallion_airflow_dag.py` (job names must match exactly).
+Airflow: `medallion_airflow_dag.py` (job names must match exactly; bronze/silver/gold parallel branches as documented in the DAG header).
 
 ---
 
@@ -50,7 +52,8 @@ Airflow: `medallion_airflow_dag.py` (job names must match exactly).
 **Bronze:** `customers`, `claims`  
 **Silver:** `silver_customers`, `silver_claims`, `silver_claims_enriched`  
 **Gold:** `gold_claims_kpi_by_state`, `gold_monthly_claim_trends`, `gold_high_risk_watchlist`  
-**CDW views:** `vw_executive_claims_by_state`, `vw_high_risk_claims_report`
+**CDW views:** `vw_executive_claims_by_state`, `vw_high_risk_claims_report`  
+**DQ audit:** `data_quality_check` — 6 rows/run (job 09, `customers`); 7 rows/run (job 08, `silver_claims_enriched`); key = `execution_id` + `target_table` + `check_name`
 
 ---
 

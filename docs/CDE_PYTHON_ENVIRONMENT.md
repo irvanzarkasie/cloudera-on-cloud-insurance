@@ -1,6 +1,6 @@
-# CDE Python Environment for Great Expectations
+# CDE Python Environment (Great Expectations + UDF libraries)
 
-Use a **Python Environment** resource in CDE (recommended) so jobs **08** and **09** have `great_expectations` on the Spark driver without runtime `pip install`.
+Use a **Python Environment** resource in CDE so Spark jobs can import third-party packages on **drivers and executors** (required for **UDFs** and DQ jobs **03**, **08**, **09**).
 
 ## 1. Create the environment resource
 
@@ -20,9 +20,18 @@ After the resource is created, open it and add dependencies (wording varies slig
 
   ```text
   great_expectations==0.18.22
+  scipy>=1.10.0,<2
+  holidays>=0.40
+  python-dateutil>=2.8.0
+  pyarrow>=14.0.0
+  pandas>=2.0.0
   ```
 
-- Or add the package **`great_expectations==0.18.22`** in the environment UI.
+  **`pyarrow`** is required for job **03** (`pandas_udf`); Spark raises `ImportError` if it is missing.
+
+  (Combined workshop list: **`cde/requirements.txt`**; UDF-only subset: **`cde/requirements-udf.txt`**.)
+
+- Rebuild the environment after adding packages.
 
 Start the **build / sync** and wait until the environment status is **Ready** (can take several minutes).
 
@@ -38,7 +47,13 @@ Python Environment holds **libraries**; the Files resource holds **your code**.
 
 ## 4. Attach the environment to Spark jobs
 
-For each DQ job (`holuser01_09_data_quality_customers`, `holuser01_08_data_quality_great_expectations`):
+For jobs that import third-party libraries:
+
+- **`holuser01_03_silver_customers`** — **scipy** (DataFrame `pandas_udf`)
+- **`holuser01_04_silver_claims`** — **holidays**, **python-dateutil** (Spark SQL UDF)
+- **`holuser01_09_data_quality_customers`**, **`holuser01_08_data_quality_great_expectations`** — `great_expectations`
+
+Steps:
 
 1. **Jobs** → open the job → **Edit**.
 2. **Application file:** select script from your **Files** resource.

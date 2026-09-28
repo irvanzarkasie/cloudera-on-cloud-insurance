@@ -5,18 +5,37 @@
 #      then Job → Configurations → Python Environment → select that resource.
 #      See docs/CDE_PYTHON_ENVIRONMENT.md
 #
-# Suggested run order: after job 01 (load customers), before silver jobs.
-#
 #   1. Create Spark session
 #   2. Query customers Iceberg table as Spark DataFrame
 #   3. Execute Great Expectations test suite on the DataFrame
+#   4. Append one row per check to Iceberg table data_quality_check
 
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 
 from pyspark.sql import SparkSession
+from pyspark.sql import types as T
 
 GX_VERSION = "0.18.22"
+
+from workshop_config import insurance_db, log_identity, resolve_username
+
+VALID_STATES = ("CA", "TX", "FL", "NY", "PA", "IL", "OH", "GA", "NC", "MI")
+
+DQ_RESULTS_SCHEMA = T.StructType(
+    [
+        T.StructField("execution_id", T.StringType(), False),
+        T.StructField("execution_time", T.TimestampType(), False),
+        T.StructField("target_table", T.StringType(), False),
+        T.StructField("check_name", T.StringType(), False),
+        T.StructField("dq_score", T.DoubleType(), False),
+        T.StructField("success", T.BooleanType(), False),
+        T.StructField("element_count", T.LongType(), True),
+        T.StructField("unexpected_count", T.LongType(), True),
+    ]
+)
 
 
 def ensure_great_expectations():
@@ -38,12 +57,6 @@ def ensure_great_expectations():
             ]
         )
 
-username = "holuser01"
-db_name = "holuser01_insurance_analytics"
-source_table = f"{db_name}.customers"
-
-VALID_STATES = ("CA", "TX", "FL", "NY", "PA", "IL", "OH", "GA", "NC", "MI")
-
 
 def build_spark(app_name):
     return (
@@ -57,7 +70,19 @@ def build_spark(app_name):
     )
 
 
-def run_expectations(spark_df):
+def dq_score_from_result(result):
+    """Score in [0, 1]: 1.0 when expectation fully passes."""
+    if result.get("success"):
+        return 1.0
+    r = result.get("result") or {}
+    element_count = r.get("element_count")
+    unexpected_count = r.get("unexpected_count")
+    if element_count and element_count > 0 and unexpected_count is not None:
+        return max(0.0, 1.0 - (unexpected_count / element_count))
+    return 0.0
+
+
+def run_expectations(spark_df, execution_id, execution_time):
     from great_expectations.dataset import SparkDFDataset
 
     ge_df = SparkDFDataset(spark_df, batch_kwargs={"data_asset_name": source_table})
@@ -85,21 +110,58 @@ def run_expectations(spark_df):
         ),
     ]
 
+    rows = []
     failed = []
     for label, result in checks:
-        status = "PASS" if result["success"] else "FAIL"
-        print(f"  [{status}] {label}")
-        if not result["success"]:
+        success = bool(result["success"])
+        score = dq_score_from_result(result)
+        r = result.get("result") or {}
+        status = "PASS" if success else "FAIL"
+        print(f"  [{status}] {label} (dq_score={score:.4f})")
+        if not success:
             failed.append(label)
-            unexpected = result.get("result", {}).get("partial_unexpected_list", [])
+            unexpected = r.get("partial_unexpected_list", [])
             if unexpected:
                 print(f"         sample unexpected: {unexpected[:5]}")
 
-    return failed
+        rows.append(
+            {
+                "execution_id": execution_id,
+                "execution_time": execution_time,
+                "target_table": source_table,
+                "check_name": label,
+                "dq_score": score,
+                "success": success,
+                "element_count": r.get("element_count"),
+                "unexpected_count": r.get("unexpected_count"),
+            }
+        )
+
+    return failed, rows
+
+
+def persist_dq_results(spark, rows):
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+    results_df = spark.createDataFrame(rows, schema=DQ_RESULTS_SCHEMA)
+    if spark.catalog.tableExists(dq_results_table):
+        results_df.writeTo(dq_results_table).using("iceberg").append()
+    else:
+        results_df.writeTo(dq_results_table).using("iceberg").create()
+    print(f"Wrote {len(rows)} DQ metric rows to {dq_results_table}")
 
 
 print("Step 1: Create Spark session")
-spark = build_spark(f"{username}-CDE-data-quality-customers")
+spark = build_spark("CDE-data-quality-customers")
+log_identity(spark)
+username = resolve_username(spark)
+db_name = insurance_db(spark)
+source_table = f"{db_name}.customers"
+dq_results_table = f"{db_name}.data_quality_check"
+
+execution_id = str(uuid.uuid4())
+execution_time = datetime.now(timezone.utc).replace(tzinfo=None)
+print(f"execution_id={execution_id}")
+print(f"execution_time={execution_time} UTC")
 
 print("...............................")
 print(f"Step 2: Query Iceberg table {source_table}")
@@ -116,7 +178,20 @@ df.show(5, truncate=False)
 print("...............................")
 print("Step 3: Run Great Expectations test suite")
 ensure_great_expectations()
-failures = run_expectations(df)
+failures, dq_rows = run_expectations(df, execution_id, execution_time)
+
+print("...............................")
+print(f"Step 4: Persist results to {dq_results_table}")
+persist_dq_results(spark, dq_rows)
+
+spark.sql(
+    f"""
+    SELECT execution_id, check_name, dq_score, success
+    FROM {dq_results_table}
+    WHERE execution_id = '{execution_id}'
+    ORDER BY check_name
+    """
+).show(truncate=False)
 
 print("...............................")
 if failures:

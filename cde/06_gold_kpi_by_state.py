@@ -3,8 +3,7 @@
 
 from pyspark.sql import SparkSession
 
-username = "holuser01"
-db_name = "holuser01_insurance_analytics"
+from workshop_config import insurance_db, log_identity, resolve_username
 
 
 def build_spark(app_name):
@@ -19,7 +18,10 @@ def build_spark(app_name):
     )
 
 
-spark = build_spark(f"{username}-CDE-gold-kpi-by-state")
+spark = build_spark("CDE-gold-kpi-by-state")
+log_identity(spark)
+username = resolve_username(spark)
+db_name = insurance_db(spark)
 
 print("Gold: KPI summary by state and policy type")
 spark.sql(
