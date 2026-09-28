@@ -43,7 +43,7 @@ flowchart TB
 
 ## Step 1 — Load customer data (Bronze)
 
-**Script:** `scripts/01_load_customers_iceberg.py`  
+**Script:** `cde/01_load_customers_iceberg.py`  
 **CDE job name:** `holuser01_01_load_customers_iceberg`
 
 1. Upload scripts to a CDE **Resource**.
@@ -69,7 +69,7 @@ SELECT COUNT(*) FROM holuser01_insurance_analytics.customers;
 Summary:
 
 1. **Resources** → **Create Resource** → type **Python Environment** (e.g. `holuser01-python-gx`).
-2. Add packages from **`scripts/requirements.txt`** (`great_expectations==0.18.22`) and wait until the environment is **Ready**.
+2. Add packages from **`cde/requirements.txt`** (`great_expectations==0.18.22`) and wait until the environment is **Ready**.
 3. Edit job **09** → **Configurations** → **Python Environment** → select `holuser01-python-gx`.
 4. **Application file** stays in your **Files** resource (`holuser01-insurance`); libraries live in the Python Environment.
 
@@ -79,7 +79,7 @@ Flow: Spark session → `spark.table("…customers")` → Great Expectations (nu
 
 ## Step 2 — Load claims data (Bronze)
 
-**Script:** `scripts/02_load_claims_iceberg.py`  
+**Script:** `cde/02_load_claims_iceberg.py`  
 **CDE job name:** `holuser01_02_load_claims_iceberg`
 
 Run after Step 1 succeeds. Uses `claims.parquet` under the same S3 prefix (or `claims_1m_sample.parquet` for a shorter run — update `claims_path` in the script).
@@ -97,7 +97,7 @@ GROUP BY policy_type;
 
 ## Step 3 — Medallion + data quality on CDE (6 jobs)
 
-Bronze tables from Steps 1–2 feed **silver/gold** PySpark jobs plus a **Great Expectations** quality gate. Create one CDE Spark job per script; run **in order** (or use Airflow — `scripts/medallion_airflow_dag.py`).
+Bronze tables from Steps 1–2 feed **silver/gold** PySpark jobs plus a **Great Expectations** quality gate. Create one CDE Spark job per script; run **in order** (or use Airflow — `cde/medallion_airflow_dag.py`).
 
 | Order | Job name | Script | Layer | Output / purpose |
 |-------|----------|--------|-------|------------------|
@@ -204,13 +204,13 @@ Follow **`cai/agent_studio/insurance_claims_agent_workflow.md`**.
 
 | Path | Description |
 |------|-------------|
-| `scripts/01–02` | Bronze ingest |
-| `scripts/03–07` | Medallion silver/gold |
-| `scripts/08_data_quality_great_expectations.py` | GX on `silver_claims_enriched` |
-| `scripts/09_data_quality_customers.py` | Sample GX on `customers` |
-| `scripts/requirements.txt` | Package list for CDE **Python Environment** resource |
+| `cde/01–02` | Bronze ingest |
+| `cde/03–07` | Medallion silver/gold |
+| `cde/08_data_quality_great_expectations.py` | GX on `silver_claims_enriched` |
+| `cde/09_data_quality_customers.py` | Sample GX on `customers` |
+| `cde/requirements.txt` | Package list for CDE **Python Environment** resource |
 | `docs/CDE_PYTHON_ENVIRONMENT.md` | Create & attach GX environment on CDE |
-| `scripts/medallion_airflow_dag.py` | Full pipeline DAG |
+| `cde/medallion_airflow_dag.py` | Full pipeline DAG |
 | `cdw/create_views.sql` | CDW views |
 | `cai/notebooks/insurance_claims_forecast.ipynb` | Forecast lab |
 | `cai/agent_studio/insurance_claims_agent_workflow.md` | Agent Studio lab |
