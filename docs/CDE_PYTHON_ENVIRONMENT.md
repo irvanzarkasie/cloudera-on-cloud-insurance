@@ -16,7 +16,7 @@ Use a **Python Environment** resource in CDE (recommended) so jobs **08** and **
 
 After the resource is created, open it and add dependencies (wording varies slightly by CDE version):
 
-- Upload **`scripts/requirements.txt`** from this workshop:
+- Upload **`cde/requirements.txt`** from this workshop:
 
   ```text
   great_expectations==0.18.22
