@@ -19,25 +19,48 @@
 
 ```mermaid
 flowchart TB
+  s3raw[(S3 raw files)]
+
   subgraph bronze [Bronze - CDE]
-    S3[(S3 raw files)] --> T1[customers]
-    S3 --> T2[claims]
+    T1[customers]
+    T2[claims]
   end
+
   subgraph silver [Silver - CDE]
-    T1 --> S1[silver_customers]
-    T2 --> S2[silver_claims]
-    S1 --> S3[silver_claims_enriched]
-    S2 --> S3
+    S1[silver_customers]
+    S2[silver_claims]
+    Senr[silver_claims_enriched]
   end
+
   subgraph gold [Gold - CDE]
-    S3 --> G1[gold_claims_kpi_by_state]
-    S3 --> G2[gold_monthly_claim_trends]
-    S3 --> G3[gold_high_risk_watchlist]
+    G1[gold_claims_kpi_by_state]
+    G2[gold_monthly_claim_trends]
+    G3[gold_high_risk_watchlist]
   end
-  gold --> CDW[CDW views]
-  gold --> CAI[CAI notebook]
+
+  s3raw --> T1
+  s3raw --> T2
+  T1 --> S1
+  T2 --> S2
+  S1 --> Senr
+  S2 --> Senr
+  Senr --> G1
+  Senr --> G2
+  Senr --> G3
+  G1 --> CDW[CDW views]
+  G2 --> CDW
+  G2 --> CAI[CAI notebook]
   CDW --> Agent[Agent Studio]
 ```
+
+**Medallion flow (jobs 01→07):** S3 → **bronze** `customers` / `claims` → **silver** `silver_*` → **gold** `gold_*` → CDW views / CAI / Agent Studio. Silver never writes back to bronze.
+
+**Draw.io (editable):**
+
+- [Medallion pipeline](docs/diagrams/medallion_iceberg_pipeline.drawio) — tables and job numbers by layer
+- [Cloudera platform flow](docs/diagrams/workshop_cloudera_platform_flow.drawio) — CDE, Iceberg, CDW, CAI, Agent Studio
+
+Open in [diagrams.net](https://app.diagrams.net/) or the Draw.io extension in VS Code / Cursor.
 
 ---
 
@@ -218,7 +241,7 @@ SELECT COUNT(*) FROM holuser01_insurance_analytics.silver_claims_enriched;
 SELECT * FROM holuser01_insurance_analytics.gold_claims_kpi_by_state LIMIT 5;
 ```
 
-**Optional orchestration:** Deploy `medallion_airflow_dag.py` to CDE Airflow. The DAG runs jobs **01–07** only (DQ jobs **08** / **09** are ad hoc, not in the DAG): **01 ∥ 02**, **03 ∥ 04**, **05 → (06 ∥ 07)**.
+**Optional orchestration:** Deploy `medallion_airflow_dag.py` to CDE Airflow. The DAG runs jobs **01–07** only (DQ jobs **08** / **09** are ad hoc, not in the DAG): **01 ∥ 02**, **03 ∥ 04**, **05 → (06 ∥ 07)**. Upload **only** this DAG file (it does not import `workshop_config.py`). Set Airflow env **`WORKSHOP_USER`** to your CDP login (e.g. `holuser01`) so `job_name` values match your CDE jobs.
 
 ---
 
@@ -251,9 +274,10 @@ GROUP BY policy_type;
 
 ## Step 5 — CAI Workbench (Jupyter)
 
-1. Open **Cloudera AI** → **Workbench** → **New Session** (Python 3, Spark-enabled runtime if available).
-2. Upload or git-import `cai/notebooks/insurance_claims_forecast.ipynb`.
-3. Run all cells.
+1. Open **Cloudera AI** → **Workbench** → **New Session** (Python 3, Spark-enabled runtime).
+2. Ensure the **Data Connection** `cloudera-hol-aw-dl` exists (Admin → Data Connections) and is available to your project.
+3. Upload or git-import `cai/notebooks/insurance_claims_forecast.ipynb`.
+4. Run all cells (first cell uses `cml.data_v1` to obtain Spark — adjust `CONNECTION_NAME` if your connection differs).
 
 **What the notebook demonstrates:**
 
@@ -305,7 +329,7 @@ Follow **`cai/agent_studio/insurance_claims_agent_workflow.md`**.
 |---------|------------|
 | Low `silver_claims_enriched` count | Expected: only claims whose `customer_id` exists in `silver_customers` (1–100k) join. |
 | CDW cannot see tables | Sync metadata / use same Hive metastore catalog as CDE; `USE holuser01_insurance_analytics`. |
-| Notebook Spark session fails | Enable Hive support; confirm VW or compute catalog is attached per CAI docs. |
+| Notebook Spark session fails | Use a Spark session; set `CONNECTION_NAME` to your CAI data connection (default `cloudera-hol-aw-dl`); confirm gold tables exist in `{username}_insurance_analytics`. |
 | Agent returns wrong SQL | Add knowledge doc with table list; restrict tool to read-only views. |
 
 ---
